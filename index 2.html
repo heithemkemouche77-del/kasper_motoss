@@ -576,7 +576,7 @@ function updateCarUI(name) {
   document.getElementById('heroCta').setAttribute('href', name ? '#order' : '#choose-car');
 }
 
-var SHEETS_URL = 'https://script.google.com/macros/s/AKfycbwGKP7k26N2i-ZCLLTgbQA4YhjhdVtBxvjoRZfitamLr-OiqeFmReChs1BJQb7wJ_MORw/exec'; // URL de l'Apps Script (reçoit les commandes dans Google Sheets)
+var SHEETS_URL = 'https://script.google.com/macros/s/AKfycbzPgqojeekj7JikSma8QZR_hbAd_ilCUfauw9L2yDlov0rV6yYYlCq1GbApjh57YT5q2A/exec'; // URL de l'Apps Script (reçoit les commandes dans Google Sheets)
 var UNIT_PRICE = 12500;
 
 function showStatus(ok, title, text) {
@@ -663,33 +663,31 @@ function qRemove(id) { qSet(qGet().filter(function(o) { return o.orderId !== id;
 
 /* Une tentative d'envoi. Réponse lue si possible (confirmée), sinon envoi "à l'aveugle" (no-cors). */
 function postOrder(data, timeoutMs) {
-  /* Transport principal : GET (requête simple, la plus fiable avec Apps Script).
-     Secours : POST si le GET dépasse le délai. Dernier recours : GET "à l'aveugle" (no-cors). */
-  var payload = JSON.stringify(data);
-  function once(mode, method) {
+  function once(mode) {
     var ctrl = window.AbortController ? new AbortController() : null;
     var timer = ctrl ? setTimeout(function() { ctrl.abort(); }, timeoutMs) : null;
-    var url = SHEETS_URL, opts = {method: method, mode: mode, redirect: 'follow', signal: ctrl ? ctrl.signal : undefined};
-    if (method === 'POST') { opts.headers = {'Content-Type': 'text/plain;charset=utf-8'}; opts.body = payload; }
-    else { url += '?d=' + encodeURIComponent(payload); }
-    return fetch(url, opts).then(function(r) { if (timer) clearTimeout(timer); return r; },
-                                 function(e) { if (timer) clearTimeout(timer); throw e; });
+    return fetch(SHEETS_URL, {
+      method: 'POST', mode: mode, keepalive: true, redirect: 'follow',
+      headers: {'Content-Type': 'text/plain;charset=utf-8'},
+      body: JSON.stringify(data),
+      signal: ctrl ? ctrl.signal : undefined
+    }).then(function(r) { if (timer) clearTimeout(timer); return r; },
+            function(e) { if (timer) clearTimeout(timer); throw e; });
   }
-  function parse(r) {
+  return once('cors').then(function(r) {
     if (!r.ok) throw new Error('http ' + r.status);
     return r.text().then(function(txt) {
       var j = null;
       try { j = JSON.parse(txt); } catch (e) {}
-      if (j && j.ok === false) { var err = new Error('server ' + (j.error || '')); err.permanent = !!j.permanent; throw err; }
-      if (!j || j.ok !== true) throw new Error('bad-response');
+      if (j && j.ok === false) {
+        var err = new Error('server'); err.permanent = !!j.permanent; throw err;
+      }
+      if (!j || j.ok !== true) throw new Error('bad-response');   /* page d'erreur Google, script absent... = PAS un succès */
       return 'confirmed';
     });
-  }
-  return once('cors', 'GET').then(parse).catch(function(err) {
-    if (err && err.permanent) throw err;
-    if (err && err.name === 'AbortError') return once('cors', 'POST').then(parse);
-    if (err && err.name === 'TypeError') return once('no-cors', 'GET').then(function() { return 'sent'; });
-    throw err;
+  }, function(err) {
+    if (err && err.name === 'AbortError') throw err;   // connexion trop lente : on réessaiera
+    return once('no-cors').then(function() { return 'sent'; });
   });
 }
 
@@ -699,7 +697,7 @@ function sendWithRetry(data, budgetMs, onRetry) {
   return new Promise(function(resolve, reject) {
     (function go() {
       attempt++;
-      postOrder(data, 20000).then(resolve, function(err) {
+      postOrder(data, 12000).then(resolve, function(err) {
         if (err && err.permanent) return reject(err);
         var wait = Math.min(800 * Math.pow(2, attempt - 1), 6000) + Math.random() * 700;
         if (Date.now() - start + wait > budgetMs) return reject(err);
